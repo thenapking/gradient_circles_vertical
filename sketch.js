@@ -1,6 +1,6 @@
 
 
-let w = 1200; // Width of the rectangle
+let w = 2400; // Width of the rectangle
 let h = 600; // Height of the rectangle
 let bw = 100; // Border width
 let n = 1000
@@ -12,18 +12,20 @@ var oneStop = 0, twoStop = 0.25, threeStop = 0.5, fourStop = 0.75, fiveStop = 1;
 var oneStopMin = 0, twoStopMin = 0, threeStopMin = 0, fourStopMin = 0, fiveStopMin = 0;
 var oneStopMax = 1, twoStopMax = 1, threeStopMax = 1, fourStopMax = 1, fiveStopMax = 1;
 var oneStopStep = 0.01, twoStopStep = 0.01, threeStopStep = 0.01, fourStopStep = 0.01, fiveStopStep = 0.01;
-var granularity = 6
+var granularity = 3
 var granularityMin = 1, granularityMax = 20, granularityStep = 1;
 var gamma = 1
 var gammaMin = 0, gammaMax = 2, gammaStep = 0.1;
 var gui;
 let guiControllers = {}; 
 let colours = []
+let UPSIDE_DOWN = false
+
 
 let mixChoices = ['rgb', 'lrgb', 'lab', 'lch', 'hsl']
 var mixChoice = 'lch'
 let direction = "up"
-var palette_name = "CERULEAN THISTLE"
+var palette_name = "GLOWING"
 var palette_names;
 let palettes = { 
   "blue-red": {oneColor: "#4375db", twoColor: "#B4B0C4", threeColor: "#CC9395", fourColor: "#EF611B", fiveColor: "#ED0707"},
@@ -66,7 +68,11 @@ function setup() {
 
   p5grain.setup();
   palette_names = Object.keys(palettes)
+  palette_name_idx = floor(random(palette_names.length))
+  palette_name = palette_names[palette_name_idx]
   set_colours(palette_name)
+  UPSIDE_DOWN = random() > 0.5
+  UPSIDE_DOWN = true
   // setup_gui()
 
   noLoop(); 
@@ -135,42 +141,153 @@ var bez
 let scaled_colours = []
 
 let lines = []
-
+let active_count = 1000000
+let segments = []
+let number_of_lines = 0
+let gr_div = 20
+let debug = false
+let circles = []
 function draw() {
   background(bgColor); // Light background color
   
   let scaled_colours = calculate_colours()
   let nn = scaled_colours.length
  
-  let n = 8
+  let n = 10
   let r = (w+2*bw)/n
   let l = (h+2*bw)/nn
   
   let xw = 3
-  let yh = 15
-  let max_y = h+2*bw
-  // draw_coloured_circles(scaled_colours,n,nn,r,l)
-  // stroke(0)
-  // strokeWeight(2)
+  let yh = 10
+  let max_y = 2*h
+
   noFill()
-  noStroke()
-  let x = -r
-  let y = 0
-  for(let i = -1; i < n + 5; i++){
-    lines[i] = []
-    x += r
-    y = -r
-    while(y < max_y){
-      let sf = 0.02
-      let nz = noise(x*sf, y*sf)
-      let y_step = map(nz, 0, 1, 0, yh)
-      let x_step = map(nz, 0, 1, -xw, xw)
-      y += y_step
-      x += x_step
-      lines[i].push({x:x, y:y})
+  stroke(0)
+  
+  create_segments()
+  draw_segments()
+
+  for(let i = 0; i < number_of_lines - 1; i++){
+    circles[i] = []
+    let this_line = lines[i]
+    let next_line = lines[i+1]
+    for(let j = 0; j < this_line.length; j++){
+      let p1 = this_line[j]
+      let p2 = next_line[j]
+      if(p1 == undefined || p2 == undefined){ continue }
+      console.log(p1, p2)
+      let m1 = (p1.start.x + p2.start.x) / 2
+      let m2 = (p1.start.y + p2.start.y) / 2
+      let d = sqrt((p1.start.x - p2.start.x)**2 + (p1.start.y - p2.start.y)**2) + 1
+      let mh = constrain(m2/(max_y),0,1)
+      let idx = floor(map(mh, 0, 0.7, 1, nn-10))
+      if(UPSIDE_DOWN){ idx = nn - 10 - idx }
+      let c = scaled_colours[idx]
+      let properties = {x:m1, y:m2, r: d, d:d, mh:mh, idx:idx, c:c, active: true}
+      circle(m1, m2, d)
+      line(p1.start.x, p1.start.y, p2.start.x, p2.start.y)
+      circles[i].push(properties)
     }
   }
+  
+  draw_circles(circles)
 
+  granulateSimple(granularity)
+}
+
+function draw_segments(){
+  push()
+  
+  for(let i = 0; i < number_of_lines; i++){
+    let this_line = lines[i]
+    for(let j = 0; j < this_line.length; j++){
+      let s = this_line[j]
+      line(s.start.x, s.start.y, s.end.x, s.end.y)
+    }
+  }
+  pop()
+}
+
+function create_segments(){
+  let old_x = 0
+  let old_y =  0
+  let seg_length = 6
+  let granularity = width / gr_div
+
+  let curv = 0.002
+  let curv2 = 10*curv
+  let line_id = 0
+  let restart_line = false;
+
+  if(debug) { console.log(`gr_div: ${gr_div}, granularity: ${granularity}, curv: ${curv}`)}
+
+  for(let x = 0; x < width*2; x += granularity){
+    if(debug) { console.log(`line_id: ${line_id}, x: ${x}`) }
+
+
+    // deal with line restarts, set x,y
+    if(!restart_line) { old_y = 0 };
+    restart_line = false;
+
+    old_x = x;  
+    lines[line_id] = []
+
+    
+    while(old_x <= width*2 && x >= 0 && old_y < height*2){
+      let nz = noise(old_x * curv, old_y * curv)
+      let angle = map(nz, 0, 1, PI*0.25, PI*.75)
+      nz = noise(old_x * curv2, old_y * curv2)
+      let swf = constrain(sin(nz*30), -1, 1)
+      let seg_width = map(swf, -1, 1, granularity*0.1, granularity*0.75)
+      let new_x = old_x+seg_length*cos(angle)
+      let new_y = old_y+seg_length*sin(angle)
+      
+      segment = {start: {x: old_x, y: old_y}, end: {x: new_x, y: new_y}, line_id: line_id}
+      
+      segment, intersects = check_segment_intersection(segment, seg_width)
+
+      lines[line_id].push(segment)
+      
+      old_x = new_x
+      old_y = new_y
+      if(intersects){ break }
+
+    }
+
+    line_id++
+    if(restart_line) {
+      x -= granularity
+      old_y += 2*seg_length
+    }
+  }
+  number_of_lines = line_id
+} 
+
+function check_segment_intersection(segment, seg_width){
+  let intersects = false
+
+  
+  return segment, intersects
+}
+
+function draw_lines(lines){
+  push()
+  stroke(0)
+  strokeWeight(1)
+  for(let i = 0; i < lines.length - 1; i++){
+    let this_line = lines[i]
+    let next_line = lines[i+1]
+    for(let j = 0; j < this_line.length; j++){
+      let p1 = this_line[j]
+      let p2 = next_line[j]
+      if(p1 == undefined || p2 == undefined){ continue }
+      line(p1.x, p1.y, p2.x, p2.y)
+    }
+  }
+  pop()
+}
+
+function place_circles(lines, max_y, nn){
   let circles = []
 
   for(let i = -1; i < lines.length - 1; i++){
@@ -181,58 +298,86 @@ function draw() {
       let p1 = this_line[j]
       let p2 = next_line[j]
       if(p1 == undefined || p2 == undefined){ continue }
-      console.log(p1,p2)
       let m1 = (p1.x + p2.x) / 2
       let m2 = (p1.y + p2.y) / 2
       let d = sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
       let mh = constrain(m2/(max_y),0,1)
-      let idx = floor(map(mh, 0, 0.75, 1, nn-10))
-      console.log(mh, idx)
+      let idx = floor(map(mh, 0, 0.5, 1, nn-10))
 
       let c = scaled_colours[idx]
-      let properties = {x:m1, y:m2, d:d, mh:mh, idx:idx, c:c}
+      let properties = {x:m1, y:m2, r: 10, d:d, mh:mh, idx:idx, c:c, active: true}
       circles[i].push(properties)
     }
   }
+  return circles
+}
 
-  for(let j = 0; j < 100; j++){
-    for(let i = -1; i < circles.length - 1; i++){
-      let properties = circles[i][j]
-      fill(properties.c)
-      circle(properties.x, properties.y, properties.d)
+function grow_circles(circles){
+  let increment = 2
+  while(active_count > 0){
+    active_count = 0
+
+    for(let i = 0; i < circles.length - 1; i++){
+      let previous_line = circles[i-1]
+      let this_line = circles[i]
+      let next_line = circles[i+1]
+      for(let j = 0; j < this_line.length; j++){
+        let intersects = false
+        let this_circle = this_line[j]
+        if(this_circle.active == false){ continue }
+        let r = this_circle.r
+        let new_r = r + increment
+
+        for(let other of previous_line){
+          if(circle_intersects_circle(this_circle.x, this_circle.y, new_r, other.x, other.y, other.r)){
+            intersects = true
+            break
+          }
+        }
+
+        for(let other of next_line){
+          if(circle_intersects_circle(this_circle.x, this_circle.y, new_r, other.x, other.y, other.r)){
+            intersects = true
+            break
+          }
+        }
+
+        if(!intersects){
+          this_circle.r = new_r 
+          active_count++
+        } else {
+          this_circle.active = false
+        }
+        
+      }
     }
   }
-
-  granulateSimple(granularity)
+  return circles
 }
 
-function draw_coloured_circles(scaled_colours,n,nn,r,l){
-  
-
-  for(let i = 0; i < n; i++){
-    push()
-      let counter = 0
-      for(let j = 0; j < nn - 1; j++){
-        let x = (i+0.5) * r
-        let y = j * l
-        
-        let sf = 0.0002
-        let nz = noise(x*sf, 0)
-        let inc = map(nz, 0, 1, 0, 2)
-        counter += inc
-        let idx = constrain(floor(counter),2, nn-1) 
-        
-        let c = scaled_colours[idx]
-        if(direction != "up"){
-          c = scaled_colours[nn - 2 - j]
-        }
-        fill(c)
-        
-        circle(x,y,r)
+function draw_circles(circles){
+  push()
+  noStroke()
+  fill(0)
+  translate(-width/4,0)
+  for(let i = 0; i < circles.length - 2; i++){  
+    let this_line = circles[i]
+    for(let j = 0; j < this_line.length-2; j++){
+      let properties = circles[i][j]
+      if(properties.c){
+        fill(properties.c)
+        circle(properties.x, properties.y, properties.r)
       }
-    pop()
+    }
   }
+  pop()
 }
+
+function circle_intersects_circle(x1, y1, r1, x2, y2, r2){
+  let d = dist(x1, y1, x2, y2)
+  return d < (r1 + r2)*0.5 - 1 // ensure no small
+}
+
 
 function calculate_colours(){
   scaled_colours = []
@@ -271,5 +416,32 @@ function keyPressed(){
     redraw()
   }
 }
+
+
+// function draw_coloured_circles(scaled_colours,n,nn,r,l){
+//   for(let i = 0; i < n; i++){
+//     push()
+//       let counter = 0
+//       for(let j = 0; j < nn - 1; j++){
+//         let x = (i+0.5) * r
+//         let y = j * l
+        
+//         let sf = 0.0002
+//         let nz = noise(x*sf, 0)
+//         let inc = map(nz, 0, 1, 0, 2)
+//         counter += inc
+//         let idx = constrain(floor(counter),2, nn-1) 
+        
+//         let c = scaled_colours[idx]
+//         if(direction != "up"){
+//           c = scaled_colours[nn - 2 - j]
+//         }
+//         fill(c)
+        
+//         circle(x,y,r)
+//       }
+//     pop()
+//   }
+// }
 
 
